@@ -58,6 +58,8 @@ function logout() {
             <dd class="mt-1 break-all font-medium">{{ auth.user.email }}</dd>
         </dl>
 
+        <p v-if="auth.user.welcome_email_sent" class="notice" role="status">Письмо отправлено</p>
+
         <form class="grid gap-4" @submit.prevent="save">
             <label class="field">
                 Имя

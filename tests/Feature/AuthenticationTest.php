@@ -2,13 +2,17 @@
 
 namespace Tests\Feature;
 
+use App\Mail\WelcomeEmail;
 use App\Models\User;
 use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Password;
+use Mockery;
+use RuntimeException;
 use Tests\TestCase;
 
 class AuthenticationTest extends TestCase
@@ -17,6 +21,8 @@ class AuthenticationTest extends TestCase
 
     public function test_registration_creates_an_account_and_starts_a_session(): void
     {
+        Mail::fake();
+
         $this->postJson(route('register.store'), [
             'name' => 'Test User',
             'email' => 'new-user@example.test',
@@ -27,6 +33,45 @@ class AuthenticationTest extends TestCase
         $user = User::where('email', 'new-user@example.test')->firstOrFail();
         $this->assertAuthenticatedAs($user, 'web');
         $this->assertTrue(Hash::check('example-password', $user->password));
+
+        Mail::assertSent(WelcomeEmail::class, fn (WelcomeEmail $mail): bool => $mail->hasTo($user->email));
+        $this->assertDatabaseHas(User::class, [
+            'id' => $user->id,
+            'welcome_email_sent' => true,
+        ]);
+
+        Auth::forgetGuards();
+
+        $this->getJson(route('api.user'))
+            ->assertOk()
+            ->assertJsonPath('data.welcome_email_sent', true);
+    }
+
+    public function test_registration_succeeds_when_the_welcome_email_cannot_be_sent(): void
+    {
+        Mail::shouldReceive('to')
+            ->once()
+            ->with(Mockery::type(User::class))
+            ->andThrow(new RuntimeException('Mail transport unavailable.'));
+
+        $this->postJson(route('register.store'), [
+            'name' => 'Test User',
+            'email' => 'new-user@example.test',
+            'password' => 'example-password',
+            'password_confirmation' => 'example-password',
+        ])->assertCreated();
+
+        $this->assertDatabaseHas(User::class, [
+            'email' => 'new-user@example.test',
+            'welcome_email_sent' => false,
+        ]);
+    }
+
+    public function test_welcome_email_greets_the_registered_user(): void
+    {
+        $welcomeEmail = new WelcomeEmail(User::factory()->make(['name' => 'Test User']));
+
+        $welcomeEmail->assertSeeInHtml('Здравствуйте, Test User!');
     }
 
     public function test_registration_rejects_an_unconfirmed_password(): void
@@ -65,6 +110,7 @@ class AuthenticationTest extends TestCase
                 'id' => $user->id,
                 'name' => $user->name,
                 'email' => $user->email,
+                'welcome_email_sent' => false,
             ]]);
     }
 
